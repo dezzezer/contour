@@ -6701,6 +6701,10 @@ void TerminalSession::smoothScrollUp(vtbackend::LineCount lineCount)
         {
             auto const cellHeight = static_cast<float>(terminal().cellPixelSize().height.as<int>());
             auto const pixels = static_cast<float>(*lineCount) * cellHeight;
+            // Keyboard scroll actions glide like a mouse-wheel notch instead of snapping whole lines.
+            if (terminal().injectWheelMomentum(pixels, steady_clock::now())
+                == vtbackend::SmoothScrollResult::Applied)
+                return;
             if (terminal().applySmoothScrollPixelDelta(pixels) == vtbackend::SmoothScrollResult::Applied)
                 return;
         }
@@ -6717,6 +6721,9 @@ void TerminalSession::smoothScrollDown(vtbackend::LineCount lineCount)
         {
             auto const cellHeight = static_cast<float>(terminal().cellPixelSize().height.as<int>());
             auto const pixels = -static_cast<float>(*lineCount) * cellHeight;
+            if (terminal().injectWheelMomentum(pixels, steady_clock::now())
+                == vtbackend::SmoothScrollResult::Applied)
+                return;
             if (terminal().applySmoothScrollPixelDelta(pixels) == vtbackend::SmoothScrollResult::Applied)
                 return;
         }
