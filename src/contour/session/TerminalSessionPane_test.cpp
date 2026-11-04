@@ -905,6 +905,9 @@ TEST_CASE("TerminalSession: output brings a scrolled-back view down without raci
     auto pane = makeSessionWithSurface(testApp.app());
     auto& terminal = pane->terminal();
     terminal.settings().autoScrollOnUpdate = true; // off by default
+    // Keyboard scroll actions glide like a wheel notch, so the viewport offset only moves as the
+    // animation advances -- this case is about auto-scroll-on-output, not about that animation.
+    terminal.settings().smoothScrolling = false;
     for (auto const line: std::views::iota(0, 40))
         terminal.writeToScreen(std::format("line {}\r\n", line));
 
