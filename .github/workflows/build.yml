@@ -27,7 +27,7 @@ on:
       - master
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build2-${{ github.ref }}
   # A master run is never cancelled by the next push: it is the one that saves the compiler cache.
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
