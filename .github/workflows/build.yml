@@ -1285,92 +1285,6 @@ jobs:
           ccache --version
           ccache --show-config | Select-String -Pattern 'cache_dir|max_size|compiler_check|sloppiness|base_dir'
           ccache -s
-      - name: "Test"
-        shell: pwsh
-        run: |
-          ctest --preset ${{ env.CMAKE_PRESET }} --build-config RelWithDebInfo -j $env:NUMBER_OF_PROCESSORS
-      - name: "verify the AF_UNIX tests actually ran"
-        # Windows is the ONLY validation the daemon's Windows transport gets -- nobody develops it
-        # on a Windows box. The AF_UNIX cases self-skip where the platform has no AF_UNIX, and a
-        # Catch2 SKIP exits 0, so a green suite cannot distinguish "the transport works" from "it
-        # was never exercised". `windows-latest` is far past the 10 1803 that introduced AF_UNIX,
-        # so a skip here is a regression, not a platform fact. Same assertion the Linux matrix
-        # makes about the tmux oracles. The transport itself is core-cpp's now (vendor/core-cpp), whose
-        # own CI runs its AF_UNIX cases on Windows; vthost_test is what exercises it from here.
-        #
-        # On WIN32 the top-level CMakeLists redirects CMAKE_RUNTIME_OUTPUT_DIRECTORY to
-        # <binaryDir>/bin, so the executables do NOT sit beside their source directory the way they
-        # do on Linux. The preset's generator is Ninja (single-config), so there is no
-        # per-configuration subdirectory under it either.
-        shell: bash
-        run: |
-          set -o pipefail
-          for binary in \
-              "out/build/${CMAKE_PRESET}/bin/vthost_test.exe"; do
-            # A missing binary must not read as "nothing skipped": that is the very failure mode
-            # this step exists to catch, one directory layout further out.
-            [ -x "$binary" ] || { echo "::error::$binary not found; the assertion below would pass vacuously"; exit 1; }
-            echo "--- $binary [afunix]"
-            output=$("$binary" '[afunix]' 2>&1) || { printf '%s\n' "$output"; exit 1; }
-            printf '%s\n' "$output"
-            if printf '%s' "$output" | grep -q 'skipped'; then
-              echo "::error::$binary [afunix] reported SKIPPED; the daemon's AF_UNIX transport is not being exercised on Windows"
-              exit 1
-            fi
-          done
-      - name: "verify the PowerShell integration tests actually ran"
-        # @see "verify the AF_UNIX tests actually ran": a Catch2 SKIP exits 0, and contour_test SKIPs
-        # the PowerShell integration's cases where no pwsh is on PATH. windows-latest carries
-        # PowerShell 7 (per actions/runner-images' Windows2025-VS2026-Readme.md), so a skip here is a
-        # regression -- and Windows is where the script's OSC 133 has to pass through ConPTY. Only
-        # [pwsh]: contour_test does not run the POSIX shells on Windows at all.
-        shell: pwsh
-        run: |
-          $binary = "out/build/$env:CMAKE_PRESET/bin/contour_test.exe"
-          # A missing binary must not read as "nothing skipped".
-          if (-not (Test-Path $binary)) {
-            Write-Output "::error::$binary not found; the assertion below would pass vacuously"
-            exit 1
-          }
-          Write-Output "--- $binary [pwsh]"
-          $output = & $binary '[pwsh]' 2>&1 | Out-String
-          $status = $LASTEXITCODE
-          Write-Output $output
-          # Before the exit status: Catch2 exits non-zero when every case skipped, which is exactly what
-          # a missing pwsh looks like.
-          if ($output -match 'skipped') {
-            Write-Output "::error::$binary [pwsh] reported SKIPPED; the PowerShell integration is not being exercised on Windows"
-            exit 1
-          }
-          if ($status -ne 0) { exit 1 }
-      - name: "verify the Win32 chrome tests actually ran"
-        # @see "verify the PowerShell integration tests actually ran": the [win32] cases SKIP off the native
-        # Windows platform, and a SKIP exits 0, so a run that never reached the native plugin would read as a
-        # pass. windows-latest has a desktop, so a skip here is a regression. The [win11-22h2] cases are left
-        # out: they SKIP on a Windows older than 22H2 (a pinned runner image), which is no regression.
-        shell: pwsh
-        env:
-          QT_QPA_PLATFORM: windows
-          QT_QUICK_BACKEND: software
-          CONTOUR_TEST_DISPLAY: "1"
-        run: |
-          $binary = "out/build/$env:CMAKE_PRESET/bin/contour_gui_test.exe"
-          # A missing binary must not read as "nothing skipped".
-          if (-not (Test-Path $binary)) {
-            Write-Output "::error::$binary not found; the assertion below would pass vacuously"
-            exit 1
-          }
-          Write-Output "--- $binary [win32]~[win11-22h2]"
-          $output = & $binary '[win32]~[win11-22h2]' 2>&1 | Out-String
-          $status = $LASTEXITCODE
-          Write-Output $output
-          if ($output -match 'skipped') {
-            Write-Output "::error::$binary [win32] reported SKIPPED; the Win32 chrome is not being exercised on Windows"
-            exit 1
-          }
-          if ($status -ne 0) { exit 1 }
-      # Pull requests build and test; packaging (WiX, zip, their checks and uploads) runs on master, the merge
-      # queue and the `release` branch.
       - name: "Install Wix Toolset"
         if: github.event_name != 'pull_request' || github.head_ref == 'release'
         run: |
@@ -1469,6 +1383,93 @@ jobs:
           path: "contour-${{ steps.set_vars.outputs.version }}-win64.zip"
           if-no-files-found: error
           retention-days: 7
+
+      - name: "Test"
+        shell: pwsh
+        run: |
+          ctest --preset ${{ env.CMAKE_PRESET }} --build-config RelWithDebInfo -j $env:NUMBER_OF_PROCESSORS
+      - name: "verify the AF_UNIX tests actually ran"
+        # Windows is the ONLY validation the daemon's Windows transport gets -- nobody develops it
+        # on a Windows box. The AF_UNIX cases self-skip where the platform has no AF_UNIX, and a
+        # Catch2 SKIP exits 0, so a green suite cannot distinguish "the transport works" from "it
+        # was never exercised". `windows-latest` is far past the 10 1803 that introduced AF_UNIX,
+        # so a skip here is a regression, not a platform fact. Same assertion the Linux matrix
+        # makes about the tmux oracles. The transport itself is core-cpp's now (vendor/core-cpp), whose
+        # own CI runs its AF_UNIX cases on Windows; vthost_test is what exercises it from here.
+        #
+        # On WIN32 the top-level CMakeLists redirects CMAKE_RUNTIME_OUTPUT_DIRECTORY to
+        # <binaryDir>/bin, so the executables do NOT sit beside their source directory the way they
+        # do on Linux. The preset's generator is Ninja (single-config), so there is no
+        # per-configuration subdirectory under it either.
+        shell: bash
+        run: |
+          set -o pipefail
+          for binary in \
+              "out/build/${CMAKE_PRESET}/bin/vthost_test.exe"; do
+            # A missing binary must not read as "nothing skipped": that is the very failure mode
+            # this step exists to catch, one directory layout further out.
+            [ -x "$binary" ] || { echo "::error::$binary not found; the assertion below would pass vacuously"; exit 1; }
+            echo "--- $binary [afunix]"
+            output=$("$binary" '[afunix]' 2>&1) || { printf '%s\n' "$output"; exit 1; }
+            printf '%s\n' "$output"
+            if printf '%s' "$output" | grep -q 'skipped'; then
+              echo "::error::$binary [afunix] reported SKIPPED; the daemon's AF_UNIX transport is not being exercised on Windows"
+              exit 1
+            fi
+          done
+      - name: "verify the PowerShell integration tests actually ran"
+        # @see "verify the AF_UNIX tests actually ran": a Catch2 SKIP exits 0, and contour_test SKIPs
+        # the PowerShell integration's cases where no pwsh is on PATH. windows-latest carries
+        # PowerShell 7 (per actions/runner-images' Windows2025-VS2026-Readme.md), so a skip here is a
+        # regression -- and Windows is where the script's OSC 133 has to pass through ConPTY. Only
+        # [pwsh]: contour_test does not run the POSIX shells on Windows at all.
+        shell: pwsh
+        run: |
+          $binary = "out/build/$env:CMAKE_PRESET/bin/contour_test.exe"
+          # A missing binary must not read as "nothing skipped".
+          if (-not (Test-Path $binary)) {
+            Write-Output "::error::$binary not found; the assertion below would pass vacuously"
+            exit 1
+          }
+          Write-Output "--- $binary [pwsh]"
+          $output = & $binary '[pwsh]' 2>&1 | Out-String
+          $status = $LASTEXITCODE
+          Write-Output $output
+          # Before the exit status: Catch2 exits non-zero when every case skipped, which is exactly what
+          # a missing pwsh looks like.
+          if ($output -match 'skipped') {
+            Write-Output "::error::$binary [pwsh] reported SKIPPED; the PowerShell integration is not being exercised on Windows"
+            exit 1
+          }
+          if ($status -ne 0) { exit 1 }
+      - name: "verify the Win32 chrome tests actually ran"
+        # @see "verify the PowerShell integration tests actually ran": the [win32] cases SKIP off the native
+        # Windows platform, and a SKIP exits 0, so a run that never reached the native plugin would read as a
+        # pass. windows-latest has a desktop, so a skip here is a regression. The [win11-22h2] cases are left
+        # out: they SKIP on a Windows older than 22H2 (a pinned runner image), which is no regression.
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: windows
+          QT_QUICK_BACKEND: software
+          CONTOUR_TEST_DISPLAY: "1"
+        run: |
+          $binary = "out/build/$env:CMAKE_PRESET/bin/contour_gui_test.exe"
+          # A missing binary must not read as "nothing skipped".
+          if (-not (Test-Path $binary)) {
+            Write-Output "::error::$binary not found; the assertion below would pass vacuously"
+            exit 1
+          }
+          Write-Output "--- $binary [win32]~[win11-22h2]"
+          $output = & $binary '[win32]~[win11-22h2]' 2>&1 | Out-String
+          $status = $LASTEXITCODE
+          Write-Output $output
+          if ($output -match 'skipped') {
+            Write-Output "::error::$binary [win32] reported SKIPPED; the Win32 chrome is not being exercised on Windows"
+            exit 1
+          }
+          if ($status -ne 0) { exit 1 }
+      # Pull requests build and test; packaging (WiX, zip, their checks and uploads) runs on master, the merge
+      # queue and the `release` branch.
   # }}}
   # {{{ Ubuntu 24.04 CC matrix
   ubuntu_2404_cc_matrix:
