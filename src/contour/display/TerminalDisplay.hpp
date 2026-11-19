@@ -3,6 +3,7 @@
 
 #include <contour/config/ConfigFwd.hpp>
 #include <contour/display/ContentScale.hpp>
+#include <contour/display/FrameRateLimiter.hpp>
 #include <contour/display/ImeQueryRect.hpp>
 #include <contour/display/RedrawCoalescer.hpp>
 #include <contour/display/RenderState.hpp>
@@ -28,6 +29,7 @@
 #include <QtQuick/QSGRenderNode>
 
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -313,6 +315,11 @@ class TerminalDisplay: public QQuickItem, public session::DisplaySurface
     void setHyperlinkDecoration(vtrasterizer::Decorator normal, vtrasterizer::Decorator hover) final;
 
     // terminal events
+    /// Asks for a frame, paced by `renderer.max_frame_rate`.
+    ///
+    /// Reached from any thread; the budget itself is decided on the GUI thread, inside the posted
+    /// dispatch, which is also where the limit is read from the session's configuration -- so a
+    /// configuration reload takes effect on the next frame, with no rebinding step.
     void scheduleRedraw() final;
     void renderBufferUpdated() final;
     void onSelectionCompleted();
@@ -465,6 +472,25 @@ class TerminalDisplay: public QQuickItem, public session::DisplaySurface
 
     void doDumpStateInternal();
 
+    /// Draws the frame a due `_updateTimer` asked for, outside `renderer.max_frame_rate`.
+    ///
+    /// The timer is the display's "a frame is due now" signal, whether what came due is the cursor blink
+    /// or an animation `terminal().nextRender()` asked for, or an output frame scheduleRedraw() deferred.
+    /// Admitting the frame before asking again is what keeps animation and local echo out of the budget
+    /// entirely: the limit only ever delays an output frame that no timer is already waiting on.
+    /// GUI thread only (the timer is connected to this method on the object's own thread).
+    void onUpdateTimerTimeout();
+
+    /// Arms `_updateTimer` for whichever of @p timeout and an already pending deadline comes first.
+    ///
+    /// Two things share this one timer: the frame `terminal().nextRender()` asks for -- the cursor blink,
+    /// the scrolling and screen-transition animations -- and the frame scheduleRedraw() deferred for
+    /// `renderer.max_frame_rate`. Whichever is due sooner must keep the slot: starting the later one
+    /// cancels the earlier, and a deferred output frame that no clock remembers again is a change drawn
+    /// only when the next request happens to come.
+    /// @param timeout The wait the caller needs.
+    void startUpdateTimer(std::chrono::milliseconds timeout);
+
     /// Logs the resolved Qt RHI backend (graphics API + device, and the OpenGL context version when
     /// that backend is in use) once, complementing the "[FYI] Qt platform" configuration line.
     /// Called from the sync phase, where QQuickWindow::rhi() is live (it is still null at
@@ -605,11 +631,18 @@ class TerminalDisplay: public QQuickItem, public session::DisplaySurface
     /// The screen the per-screen hooks (refresh rate, logical DPI) are currently connected to;
     /// re-homed by configureScreenHooks() whenever the window changes screens.
     QScreen* _hookedScreen = nullptr;
-    // update() timer used to animate the blinking cursor.
+    // The display's single-shot "next frame" timer: it animates the blinking cursor (and every other
+    // frame terminal().nextRender() asks for), and it carries the wait scheduleRedraw() puts on an
+    // output frame that `renderer.max_frame_rate` deferred. Whichever is due sooner holds it.
     QTimer _updateTimer;
     /// Keeps at most one redraw queued on the GUI thread: scheduleRedraw() is called after every parsed
     /// batch, and one queued redraw draws every change made before it starts. @see RedrawCoalescer.
     RedrawCoalescer _redrawCoalescer;
+    /// Paces the frames scheduleRedraw() asks for, by the session's `renderer.max_frame_rate`. Read from
+    /// `_session->config()` where it is used rather than pushed in by a setter, the way profile() reads the
+    /// session: the session is this display's configuration source, and its snapshot is replaced on reload.
+    /// Touched on the GUI thread only (the posted redraw dispatch, the update timer, key input).
+    FrameRateLimiter _frameRateLimiter;
 
     // {{{ Auto-scroll state for drag-selection outside window
     QTimer _autoScrollTimer;

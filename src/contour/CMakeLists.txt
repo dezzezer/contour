@@ -1457,6 +1457,7 @@ if(CONTOUR_TESTING)
         cli/ShellIntegration_test.cpp
         cli/ShellIntegrationShells_test.cpp
         display/RedrawCoalescer_test.cpp
+        display/FrameRateLimiter_test.cpp
         session/SearchStatus_test.cpp
         session/PastePreview_test.cpp
         session/RestoreSummaryPolicy_test.cpp

@@ -47,6 +47,22 @@ renderer:
     gpu: auto
 ```
 
+### `renderer.max_frame_rate`
+
+The most frames per second that redraws caused by terminal output may draw. `0` — the default — means
+no limit, which is the right setting for a GPU renderer.
+
+It exists for `renderer.backend: software`, which rasterizes on the CPU: a window flooded with output
+otherwise redraws at the display's refresh rate and can spend a core or more doing it. Frames over the
+budget are not dropped — they wait, and the next frame draws every change accumulated meanwhile. Cursor
+blinking, scrolling animations and the echo of what you type are never limited, so the terminal stays
+responsive while output is throttled. A change applies to open windows at once.
+
+```yml
+renderer:
+    max_frame_rate: 30
+```
+
 ### `renderer.tile_hashtable_slots`
 
 Defines the number of hashtable slots to map to the texture tiles.

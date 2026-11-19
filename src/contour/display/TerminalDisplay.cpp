@@ -153,7 +153,8 @@ TerminalDisplay::TerminalDisplay(QQuickItem* parent):
     connect(this, &QQuickItem::windowChanged, this, &TerminalDisplay::handleWindowChanged);
 
     _updateTimer.setSingleShot(true);
-    connect(&_updateTimer, &QTimer::timeout, this, &TerminalDisplay::scheduleRedraw, Qt::QueuedConnection);
+    connect(
+        &_updateTimer, &QTimer::timeout, this, &TerminalDisplay::onUpdateTimerTimeout, Qt::QueuedConnection);
 
     _autoScrollTimer.setInterval(50);
     connect(
@@ -291,6 +292,8 @@ void TerminalDisplay::assignSession(session::TerminalSession* newSession)
     // rather than delivered -- must not leave the next session's requests waiting on it. If one is still
     // in flight, the worst this costs is one extra update.
     _redrawCoalescer.disarm();
+    // Same for the frame budget: the frame the previous owner drew last is not the new one's to pace.
+    _frameRateLimiter.reset();
 }
 
 void TerminalDisplay::setSession(session::TerminalSession* newSession)
@@ -1284,7 +1287,7 @@ void TerminalDisplay::paint()
             if (*timeoutOpt == chrono::milliseconds::min())
                 requestUpdate();
             else
-                post([this, timeout = *timeoutOpt]() { _updateTimer.start(timeout); });
+                post([this, timeout = *timeoutOpt]() { startUpdateTimer(timeout); });
         }
     }
     catch (exception const& e)
@@ -1387,6 +1390,9 @@ void TerminalDisplay::keyPressEvent(QKeyEvent* keyEvent)
 {
     if (!_session)
         return;
+    // The echo of what the user just typed is the one frame a rate limit must not delay: admit the next
+    // frame, which is the one the program's output of this keystroke will ask for.
+    _frameRateLimiter.admitNextFrame();
     session::sendKeyEvent(keyEvent,
                           keyEvent->isAutoRepeat() ? vtbackend::KeyboardEventType::Repeat
                                                    : vtbackend::KeyboardEventType::Press,
@@ -2297,9 +2303,43 @@ void TerminalDisplay::scheduleRedraw()
         // Disarmed before update(), so a request made while the update runs queues another redraw rather
         // than being folded into this one.
         _redrawCoalescer.disarm();
-        if (window())
-            window()->update();
+        if (!window())
+            return;
+
+        // The frame budget (`renderer.max_frame_rate`) applies HERE and only here: this is the output
+        // path. A frame over budget is not dropped -- the coalescer is already disarmed, so the next
+        // request queues another one, and the timer below draws whatever accumulated once the window
+        // has elapsed. The limit is read at dispatch time, on the GUI thread, from the session's own
+        // configuration: a reload replaces that snapshot, so the next frame follows the new value.
+        if (_session)
+        {
+            auto const maxFrameRate = _session->config().renderer.value().maxFrameRate;
+            auto const timing = _frameRateLimiter.request(steady_clock::now(), maxFrameRate);
+            if (timing.action == RedrawAction::Defer)
+            {
+                // Rounded up, so the frame is never drawn before the budget allows it.
+                startUpdateTimer(std::chrono::ceil<std::chrono::milliseconds>(timing.delay));
+                return;
+            }
+        }
+
+        window()->update();
     });
+}
+
+void TerminalDisplay::onUpdateTimerTimeout()
+{
+    // The timer's frame is due, whatever made it due: admit it so the budget below cannot defer a
+    // cursor blink or a scrolling animation, then ask for it the ordinary way.
+    _frameRateLimiter.admitNextFrame();
+    scheduleRedraw();
+}
+
+void TerminalDisplay::startUpdateTimer(std::chrono::milliseconds timeout)
+{
+    auto const delay = static_cast<int>(timeout.count());
+    if (!_updateTimer.isActive() || _updateTimer.remainingTime() > delay)
+        _updateTimer.start(delay);
 }
 
 void TerminalDisplay::renderBufferUpdated()

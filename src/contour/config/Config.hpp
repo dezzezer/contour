@@ -830,6 +830,11 @@ struct RendererConfig
 {
     RenderingBackend renderingBackend { RenderingBackend::Auto };
     GpuSelector gpu {}; ///< Which GPU renders (`renderer.gpu`); applied at the next start.
+    /// `renderer.max_frame_rate`: the most frames per second that redraws caused by terminal output may
+    /// draw. 0 (the default) means no limit. Cursor blinking, scrolling animations and the echo of local
+    /// input are never limited -- only the flood of frames an application's output asks for. Applied
+    /// live: the display reads it from the session's configuration, so a reload takes effect at once.
+    int maxFrameRate = 0;
     crispy::LRUCapacity textureAtlasTileCount { 4000u };
     crispy::StrongHashtableSize textureAtlasHashtableSlots { 4096u };
     bool textureAtlasDirectMapping { false };

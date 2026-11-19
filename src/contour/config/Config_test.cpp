@@ -126,6 +126,43 @@ TEST_CASE("Config: the generated config documents renderer.gpu with a value", "[
     CHECK(contour::config::defaultConfigString().contains("    gpu: auto\n"));
 }
 
+TEST_CASE("Config: renderer.max_frame_rate defaults to no limit and reports a negative value",
+          "[config][renderer]")
+{
+    CHECK(contour::config::RendererConfig {}.maxFrameRate == 0);
+
+    QTemporaryDir dir;
+    auto const limited = loadFromYaml(dir, R"(
+renderer:
+    max_frame_rate: 30
+profiles:
+    main:
+        shell: /bin/sh
+)"sv);
+    CHECK(limited.renderer.value().maxFrameRate == 30);
+
+    // 0 is how "no limit" is spelled, so a negative is a typo: reported, and read as the default rather
+    // than silently becoming a second vocabulary for the same thing.
+    auto capture = core::log::ScopedCapture { "error" };
+    QTemporaryDir negativeDir;
+    auto const negative = loadFromYaml(negativeDir, R"(
+renderer:
+    max_frame_rate: -5
+profiles:
+    main:
+        shell: /bin/sh
+)"sv);
+    CHECK(negative.renderer.value().maxFrameRate == 0);
+    INFO("captured error log:\n" << capture.text());
+    CHECK(capture.contains("renderer.max_frame_rate"));
+}
+
+TEST_CASE("Config: the generated config documents renderer.max_frame_rate", "[config][renderer]")
+{
+    // The default the display starts from, written out so a user editing the file sees the option.
+    CHECK(contour::config::defaultConfigString().contains("    max_frame_rate: 0\n"));
+}
+
 TEST_CASE("Config: the desktop-notification close timeout defaults to ten seconds", "[config]")
 {
     // Only consulted where a close cannot be observed -- today the portal backend a sandboxed

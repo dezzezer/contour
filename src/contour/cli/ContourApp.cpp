@@ -735,6 +735,7 @@ Let's go through the different sections of the global configurations in the file
 platform_plugin: auto
 renderer:
     backend: auto
+    max_frame_rate: 0
     tile_hashtable_slots: 4096
     tile_cache_count: 4000
     tile_direct_mapping: true

@@ -827,6 +827,7 @@ struct Writer
         return format(doc,
                       v.renderingBackend,
                       v.gpu,
+                      v.maxFrameRate,
                       v.textureAtlasDirectMapping,
                       v.textureAtlasHashtableSlots,
                       v.textureAtlasTileCount);

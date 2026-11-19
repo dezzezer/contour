@@ -3746,6 +3746,14 @@ void YAMLConfigReader::loadFromEntry(YAML::Node const& node, std::string const& 
         loadGuarded(child, "tile_cache_count", where.textureAtlasTileCount);
         loadGuarded(child, "backend", where.renderingBackend);
         loadGuarded(child, "gpu", where.gpu);
+        loadGuarded(child, "max_frame_rate", where.maxFrameRate);
+        // 0 is how "no limit" is spelled, so a negative value is a typo rather than a second vocabulary
+        // for the same thing: reported, and read as the default instead of letting the display guess.
+        if (where.maxFrameRate < 0)
+        {
+            errorLog()("Invalid renderer.max_frame_rate value {}; using 0 (no limit).", where.maxFrameRate);
+            where.maxFrameRate = 0;
+        }
     }
 }
 
