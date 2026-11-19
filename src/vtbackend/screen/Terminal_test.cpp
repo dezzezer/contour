@@ -1062,7 +1062,7 @@ TEST_CASE("Terminal.SynchronizedOutputRate", "[terminal]")
         auto const framesBefore = mc.terminal.lastFrameID();
         mc.steadyClock.advance(1s);
         mc.terminal.tick(mc.steadyClock.now());
-        CHECK(mc.terminal.renderBufferUpdates == 0);
+        CHECK(mc.renderBufferUpdates == 0);
         CHECK(mc.terminal.lastFrameID() == framesBefore);
     }
 
@@ -1102,7 +1102,7 @@ TEST_CASE("Terminal.SynchronizedOutputRate", "[terminal]")
         mc.writeToScreen("two");
         mc.writeToScreen(BatchOff);
         CHECK(mc.terminal.lastFrameID() == afterFirst);
-        CHECK(mc.terminal.renderBufferUpdates == 1);
+        CHECK(mc.renderBufferUpdates == 1);
         CHECK(mc.terminal.isRenderingSuppressed()); // the batch's screenUpdated() must not build it either
         CHECK_FALSE(mc.terminal.ensureFreshRenderBuffer());
         CHECK(trimmedTextScreenshot(mc) == "one");
@@ -1118,14 +1118,14 @@ TEST_CASE("Terminal.SynchronizedOutputRate", "[terminal]")
         mc.writeToScreen(BatchOn);
         mc.writeToScreen("three");
         mc.writeToScreen(BatchOff);
-        CHECK(mc.terminal.renderBufferUpdates == 1);
+        CHECK(mc.renderBufferUpdates == 1);
         CHECK(mc.terminal.lastFrameID() == afterFirst);
 
         // The slot has come: exactly one notification for it, and the frame the grid has been holding is
         // built.
         mc.steadyClock.advance(65ms);
         mc.terminal.tick(mc.steadyClock.now());
-        CHECK(mc.terminal.renderBufferUpdates == 2);
+        CHECK(mc.renderBufferUpdates == 2);
         CHECK(mc.terminal.lastFrameID() == afterFirst); // tick() asks, the render thread builds
         CHECK_FALSE(mc.terminal.isRenderingSuppressed());
         CHECK(mc.terminal.ensureFreshRenderBuffer());
@@ -1134,7 +1134,7 @@ TEST_CASE("Terminal.SynchronizedOutputRate", "[terminal]")
         // Nothing is owed any more: a tick of its own does nothing.
         mc.steadyClock.advance(1s);
         mc.terminal.tick(mc.steadyClock.now());
-        CHECK(mc.terminal.renderBufferUpdates == 2);
+        CHECK(mc.renderBufferUpdates == 2);
         CHECK(mc.terminal.lastFrameID() == afterFirst + 1);
     }
 
