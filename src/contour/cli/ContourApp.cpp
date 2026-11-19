@@ -738,6 +738,7 @@ renderer:
     tile_hashtable_slots: 4096
     tile_cache_count: 4000
     tile_direct_mapping: true
+    synchronized_output_rate: 0
 word_delimiters: " /\\()\"'-.,:;<>~!@#$%^&*+=[]{{}}~?|│"
 read_buffer_size: {}
 pty_buffer_size: 1048576

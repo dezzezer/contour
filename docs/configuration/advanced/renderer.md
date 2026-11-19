@@ -90,3 +90,28 @@ Default: true
 renderer:
     tile_direct_mapping: true
 ```
+
+### `renderer.synchronized_output_rate`
+
+Caps how many synchronized-output frames per second may build a render buffer.
+
+Modern TUIs (`opencode`, `neovim`, `tmux`, ...) wrap every frame in a synchronized-output block
+(`CSI ? 2026 h` ... `CSI ? 2026 l`). Every closed block otherwise costs a full frame build,
+which the software renderer rasterizes on the CPU. With a limit set, a block that ends sooner
+than the rate allows is held back: what it wrote is already in the grid, and it reaches the screen
+at the next slot the rate opens -- including the last block of a burst, after which the application
+may write nothing at all.
+
+The value is a frequency in Hz and may be fractional (`30`, `12.5`). It is not a whole-number
+frame divider: the terminal derives the minimum spacing between two rendered blocks from it.
+
+`0` -- the default -- disables the limit, so every closed block renders as before. This option
+does not affect the 150 ms timeout that draws a block an application never closes, and it does not
+limit frames that are not block ends (cursor blink, animations). It applies live.
+
+Default: `0`
+
+```yml
+renderer:
+    synchronized_output_rate: 12.5
+```

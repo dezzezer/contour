@@ -1849,6 +1849,9 @@ vtbackend::Settings sessionSettings(Config const& config,
     settings.inputWriter = vtbackend::InputWriter::ReaderThread;
     settings.ptyBufferObjectSize = config.ptyBufferObjectSize.value();
     settings.ptyReadBufferSize = config.ptyReadBufferSize.value();
+    // The renderer's own limit on frame builds, though it is applied in the engine: how often a closed
+    // synchronized-output block may draw, and so how often the display is asked for a frame at all.
+    settings.synchronizedOutputRate = config.renderer.value().synchronizedOutputRate;
     settings.mouseWheelScrollMultiplier = profile.history.value().historyScrollMultiplier;
     settings.autoScrollOnUpdate = profile.history.value().autoScrollOnUpdate;
     settings.copyLastMarkRangeOffset = profile.copyLastMarkRangeOffset.value();
@@ -3746,6 +3749,11 @@ void YAMLConfigReader::loadFromEntry(YAML::Node const& node, std::string const& 
         loadGuarded(child, "tile_cache_count", where.textureAtlasTileCount);
         loadGuarded(child, "backend", where.renderingBackend);
         loadGuarded(child, "gpu", where.gpu);
+        loadGuarded(child, "synchronized_output_rate", where.synchronizedOutputRate);
+        // Hz. Anything that is not a positive number -- a negative, a zero, a NaN -- means the rate limit is
+        // off, which is the one way an absent or nonsensical value can behave.
+        if (!(where.synchronizedOutputRate > 0.0))
+            where.synchronizedOutputRate = 0.0;
     }
 }
 

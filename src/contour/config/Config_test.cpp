@@ -126,6 +126,29 @@ TEST_CASE("Config: the generated config documents renderer.gpu with a value", "[
     CHECK(contour::config::defaultConfigString().contains("    gpu: auto\n"));
 }
 
+TEST_CASE("Config: renderer.synchronized_output_rate loads fractions and treats nonsense as off", "[config]")
+{
+    QTemporaryDir dir;
+    auto const cfg = loadFromYaml(dir, R"(
+renderer:
+    synchronized_output_rate: 12.5
+profiles:
+    main:
+        shell: /bin/sh
+)"sv);
+    CHECK(cfg.renderer.value().synchronizedOutputRate == Catch::Approx(12.5));
+
+    // Not a frequency: the limit is off, which is what 0 means anyway.
+    QTemporaryDir negativeDir;
+    auto const negative = loadFromYaml(
+        negativeDir,
+        "renderer:\n    synchronized_output_rate: -5\nprofiles:\n    main:\n        shell: /bin/sh\n"sv);
+    CHECK(negative.renderer.value().synchronizedOutputRate == 0.0);
+
+    // The generated configuration spells the default out, so the key is discoverable.
+    CHECK(contour::config::defaultConfigString().contains("    synchronized_output_rate: 0\n"));
+}
+
 TEST_CASE("Config: the desktop-notification close timeout defaults to ten seconds", "[config]")
 {
     // Only consulted where a close cannot be observed -- today the portal backend a sandboxed

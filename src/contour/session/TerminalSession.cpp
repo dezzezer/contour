@@ -7904,6 +7904,7 @@ namespace
         &vtbackend::Settings::smoothScrolling,
         &vtbackend::Settings::momentumScrolling,
         &vtbackend::Settings::stickyHeader,
+        &vtbackend::Settings::synchronizedOutputRate,
     };
 } // namespace
 

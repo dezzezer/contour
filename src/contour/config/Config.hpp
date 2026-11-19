@@ -833,6 +833,10 @@ struct RendererConfig
     crispy::LRUCapacity textureAtlasTileCount { 4000u };
     crispy::StrongHashtableSize textureAtlasHashtableSlots { 4096u };
     bool textureAtlasDirectMapping { false };
+    /// `synchronized_output_rate`: how many synchronized-output blocks per second may build a render
+    /// buffer; 0 -- the default -- renders every closed block. Hz rather than a duration because that is
+    /// what the user states; the terminal derives the spacing. Applies live.
+    double synchronizedOutputRate { 0.0 };
 };
 
 struct ImagesConfig

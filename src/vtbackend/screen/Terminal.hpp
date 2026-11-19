@@ -1298,12 +1298,16 @@ class Terminal: public IStatusLinePublishTarget
     bool isModeEnabled(AnsiMode m) const noexcept { return _modes.enabled(m); }
     bool isModeEnabled(DECMode m) const noexcept { return _modes.enabled(m); }
 
-    /// Whether rendering is currently suppressed by synchronized output (DECSET 2026).
+    /// Whether rendering is currently suppressed by synchronized output (DECSET 2026), or by a block end
+    /// its rate limit held back.
     ///
     /// Distinct from `isModeEnabled(DECMode::BatchedRendering)`, which reports the mode as the
     /// application set it and is what DECRQM must answer. This asks the narrower question the
     /// render paths actually care about, and answers false once the block has outlived
-    /// `Settings::synchronizedOutputTimeout`, so a block left open cannot freeze the display.
+    /// `Settings::synchronizedOutputTimeout`, so a block left open cannot freeze the display. A block
+    /// end that `Settings::synchronizedOutputRate` held back keeps answering true until the slot it was
+    /// deferred to, which bounds it by one spacing and is read off the steady clock like the timeout:
+    /// the frame is never owed past that slot, whether or not a display ticks the terminal to close it.
     [[nodiscard]] bool isRenderingSuppressed() const noexcept;
     void setMode(AnsiMode mode, bool enable);
     void setMode(DECMode mode, bool enable);
@@ -2409,13 +2413,15 @@ class Terminal: public IStatusLinePublishTarget
 
     // {{{ Screen Render Proxy
     /// When the display should draw next though nothing asks for a frame: a blink, an animation, a status
-    /// line command, or link detection's next scan, as the last frame left it. Takes no lock, and is asked
+    /// line command, link detection's next scan, or the slot a block end deferred by
+    /// `Settings::synchronizedOutputRate` is due at, as the last frame left it. Takes no lock, and is asked
     /// after every frame.
     /// @return The wait, or nullopt when nothing is due.
     std::optional<std::chrono::milliseconds> nextRender() const;
 
-    /// Sets the terminal's clock to @p now, and advances what runs on it between frames: the cursor's blink
-    /// and a momentum glide. The render thread's alone, before and after each frame, and a test's: no other
+    /// Sets the terminal's clock to @p now, and advances what runs on it between frames: the cursor's blink,
+    /// a momentum glide, and the frame a block end deferred by `Settings::synchronizedOutputRate` is owed
+    /// once its slot has come. The render thread's alone, before and after each frame, and a test's: no other
     /// thread ticks, so what it advances has one owner. Takes the state lock while a glide is armed, so it is
     /// never called with that lock held.
     /// @param now The time of the frame.
@@ -4201,6 +4207,11 @@ class Terminal: public IStatusLinePublishTarget
     /// @return Due when the listener is to be told.
     [[nodiscard]] ScreenNotification markScreenChanged();
 
+    /// The least time between two synchronized-output block ends that build a frame, from
+    /// `Settings::synchronizedOutputRate`.
+    /// @return The spacing, or a zero duration when the rate is disabled (0, negative or not a number).
+    [[nodiscard]] std::chrono::steady_clock::duration synchronizedOutputRenderInterval() const noexcept;
+
     /// The frames one repaint of the indicator status line reads, at most one per extension name: what
     /// statusLineExtensionText() reads while updateIndicatorStatusLine() runs.
     struct StatusLineExtensionFrame
@@ -5279,6 +5290,29 @@ class Terminal: public IStatusLinePublishTarget
     /// reads it, the same reason `_renderBufferUpdateEnabled` is. Only meaningful while that flag
     /// is clear.
     std::atomic<std::chrono::steady_clock::time_point> _synchronizedOutputSince {};
+
+    /// When the last synchronized-output block built a frame, or `time_point::min()` before the first one.
+    ///
+    /// `Settings::synchronizedOutputRate` measures its spacing from here, so a suppressed block is judged
+    /// against what was actually rendered rather than against anything the block itself wrote. Written on
+    /// the parser thread (a block end that renders) and on the render thread (tick() closing a deferred
+    /// one), read on the parser thread when the next block ends.
+    std::atomic<std::chrono::steady_clock::time_point> _lastSynchronizedOutputRender {
+        std::chrono::steady_clock::time_point::min()
+    };
+
+    /// When the frame a block end was deferred to comes due, or `time_point::max()` when none is owed.
+    /// Atomic for the same threads as `_synchronizedOutputRenderPending`.
+    std::atomic<std::chrono::steady_clock::time_point> _synchronizedOutputRenderDue {
+        std::chrono::steady_clock::time_point::max()
+    };
+
+    /// Whether a synchronized-output block ended inside its rate's spacing and its frame is still owed.
+    ///
+    /// The parser thread arms it and the render thread's tick() closes it. It also keeps
+    /// isRenderingSuppressed() true until the deadline, so the paint the batch would otherwise request
+    /// builds no frame in between, and the frame is built once, at the slot.
+    std::atomic<bool> _synchronizedOutputRenderPending = false;
 
     /// Guards _guiTabInfoForStatusLine. Dedicated (not _stateMutex) so the GUI-thread writer
     /// (setGuiTabInfoForStatusLine) does not block on the heavily-contended _stateMutex held by the parser

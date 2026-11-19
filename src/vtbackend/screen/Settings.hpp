@@ -230,6 +230,23 @@ struct Settings
     /// truncating the normal one. It is deliberately not a throughput knob: lowering it does not
     /// make a well-behaved application render faster.
     std::chrono::milliseconds synchronizedOutputTimeout { 150 };
+
+    /// How many synchronized-output (DECSET 2026) blocks per second may build a render buffer, i.e. the
+    /// rate at which an application that closes a block per frame is allowed to make the terminal draw.
+    ///
+    /// Zero -- the default -- renders every closed block, exactly as before. A positive value is a
+    /// frequency in Hz, which is what a person states ("12.5 frames a second"), and the terminal turns it
+    /// into the minimum spacing between two rendered blocks; it is deliberately not a whole-number frame
+    /// divider. A block that ends inside that spacing does not build a frame: what it wrote is in the grid
+    /// already, and the deferred frame is built at the slot this spacing opens (@see Terminal::nextRender,
+    /// Terminal::tick), so the last block of a burst shows even when nothing is written afterwards.
+    ///
+    /// A double rather than a duration is a configuration choice: the writer spells it as the number the
+    /// user would type, and the config already carries doubles this way (`dim_unfocused`, the font sizes).
+    /// Read on the parser thread when a block ends, like the rest of the settings a reload assigns under
+    /// the terminal's lock.
+    double synchronizedOutputRate = 0.0;
+
     RefreshRate refreshRate = { 30.0 };
 
     // Defines the time to wait before the terminal executes the line feed (LF) command.

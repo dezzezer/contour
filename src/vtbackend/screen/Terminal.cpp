@@ -3155,6 +3155,15 @@ optional<chrono::milliseconds> Terminal::nextRender() const
             nextWakeup,
             chrono::ceil<chrono::milliseconds>(std::max(due - now, chrono::steady_clock::duration::zero())));
 
+    // A block end the synchronized-output rate held back: wake the display at its slot, so the last block of
+    // a burst reaches the screen even when the application writes nothing afterwards.
+    if (_synchronizedOutputRenderPending.load(std::memory_order_acquire))
+    {
+        auto const due = _synchronizedOutputRenderDue.load(std::memory_order_acquire);
+        auto const wait = due > now ? due - now : chrono::steady_clock::duration::zero();
+        nextWakeup = std::min(nextWakeup, chrono::ceil<chrono::milliseconds>(wait));
+    }
+
     if (nextWakeup == chrono::milliseconds::max())
         return nullopt;
 
@@ -3169,6 +3178,30 @@ void Terminal::tick(chrono::steady_clock::time_point now) noexcept
 
     _currentTime.store(now, std::memory_order_relaxed);
     updateCursorVisibilityState();
+
+    // A block end the rate limit held back is owed now: one notification, and the frame it asks for is built
+    // on the render thread from the grid, which never stopped carrying the block's output. Cleared first, so
+    // a block that closes while the display answers this one arms the next deferral rather than folding into
+    // this one. The listener is told directly rather than through renderBufferUpdated(), whose suppression
+    // check would swallow the notification for a block that is open at this instant -- and one that never
+    // closes must not keep the frame this slot owes off the screen.
+    if (_synchronizedOutputRenderPending.load(std::memory_order_acquire))
+    {
+        auto const due = _synchronizedOutputRenderDue.load(std::memory_order_acquire);
+        if (now >= due)
+        {
+            _synchronizedOutputRenderPending.store(false, std::memory_order_release);
+            _synchronizedOutputRenderDue.store(std::chrono::steady_clock::time_point::max(),
+                                               std::memory_order_release);
+            // Only a slot that is not under a fresh block rendered anything: a block open at this instant
+            // keeps the fill suppressed, so the next block that closes is still judged against the last
+            // frame actually built.
+            if (!isRenderingSuppressed())
+                _lastSynchronizedOutputRender.store(now, std::memory_order_release);
+            markScreenDirty();
+            _eventListener.renderBufferUpdated();
+        }
+    }
 
     // Apply momentum scrolling each frame. The glide moves the view, which the parser thread and the GUI
     // thread move under the state lock, so it takes that lock too: only while one is armed, as a frame
@@ -8482,14 +8515,35 @@ void Terminal::markRegionDirty(Rect area) noexcept
     //     clearSelection();
 }
 
+std::chrono::steady_clock::duration Terminal::synchronizedOutputRenderInterval() const noexcept
+{
+    auto const rate = _settings.synchronizedOutputRate; // Hz
+    if (!(rate > 0.0))                                  // also false for NaN
+        return {};
+
+    // The spacing the rate names, rounded UP: a rate the clock cannot express exactly must never render
+    // faster than asked for, and 1/rate in floating seconds is exactly what the setting means.
+    return std::chrono::ceil<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / rate));
+}
+
 bool Terminal::isRenderingSuppressed() const noexcept
 {
+    auto const now = _clocks.steady.now();
+
+    // A block end the rate limit held back owns the grid until its slot: no frame of the batch that closed
+    // it may be built, or the limit would only move from the close to the paint it schedules. Time-bounded
+    // like the block's own suppression, so a terminal nobody ticks -- a mirror's host, say -- still draws
+    // once the slot has come.
+    if (_synchronizedOutputRenderPending.load(std::memory_order_acquire)
+        && now < _synchronizedOutputRenderDue.load(std::memory_order_acquire))
+        return true;
+
     // Keyed on the render-buffer flag rather than the mode register: both are set by the same
     // transition, but only this one is atomic, and this predicate is read from the render thread.
     if (_renderBufferUpdateEnabled.load(std::memory_order_acquire))
         return false;
 
-    return (_clocks.steady.now() - _synchronizedOutputSince.load(std::memory_order_acquire))
+    return (now - _synchronizedOutputSince.load(std::memory_order_acquire))
            < _settings.synchronizedOutputTimeout;
 }
 
@@ -8509,20 +8563,55 @@ void Terminal::synchronizedOutput(bool enabled)
     auto const now = _clocks.steady.now();
     _currentTime.store(now, std::memory_order_relaxed);
 
-    auto const diff = now - _renderBuffer.lastUpdate.load(std::memory_order_relaxed);
-    if (diff < _refreshInterval.get().value)
+    auto const renderInterval = synchronizedOutputRenderInterval();
+    if (renderInterval > std::chrono::steady_clock::duration::zero())
     {
-        // Instrumentation only: this is the throttle doing its job, and it is the expected outcome
-        // for most block ends. Named so a capture can tell it apart from the branch below.
-        ZoneScopedN("syncOut.dropped.throttled");
-        return;
+        auto const lastRendered = _lastSynchronizedOutputRender.load(std::memory_order_acquire);
+        if (lastRendered != std::chrono::steady_clock::time_point::min()
+            && now - lastRendered < renderInterval)
+        {
+            // One block among the many an application closes per second: its content is in the grid already,
+            // so only the frame is owed. The deadline is measured from the block that actually rendered and
+            // does not move for the blocks that follow in the same window -- they all wait for that one slot.
+            ZoneScopedN("syncOut.deferred.rate");
+            _synchronizedOutputRenderDue.store(lastRendered + renderInterval, std::memory_order_release);
+
+            // The first block held back in a window wakes the display once, because a frame is where the
+            // display arms its update timer from nextRender(): without it nothing would ever come to close
+            // this deadline, which is the one thing the whole deferral exists to prevent. That frame builds
+            // nothing -- rendering is suppressed until the slot -- it only re-arms. The blocks that follow
+            // in the same window need no second wakeup: the timer already runs to the same slot.
+            if (!_synchronizedOutputRenderPending.exchange(true, std::memory_order_acq_rel))
+            {
+                markScreenDirty();
+                _eventListener.renderBufferUpdated();
+            }
+            return;
+        }
+
+        // This block gets the slot, so any earlier deferral is closed by the frame built below.
+        _synchronizedOutputRenderPending.store(false, std::memory_order_release);
+        _synchronizedOutputRenderDue.store(std::chrono::steady_clock::time_point::max(),
+                                           std::memory_order_release);
+    }
+    else
+    {
+        // Rate disabled (the default): unchanged -- one close per refresh interval builds a frame.
+        auto const diff = now - _renderBuffer.lastUpdate.load(std::memory_order_relaxed);
+        if (diff < _refreshInterval.get().value)
+        {
+            // Instrumentation only: this is the throttle doing its job, and it is the expected outcome
+            // for most block ends. Named so a capture can tell it apart from the branch below.
+            ZoneScopedN("syncOut.dropped.throttled");
+            return;
+        }
     }
 
     if (_renderBuffer.state == RenderBufferState::TrySwapBuffers)
     {
-        // Instrumentation only. This branch drops a repaint that the throttle would have allowed, and
-        // nothing re-arms it: while this state lasts, the batch's screenUpdated() only retries the swap of
-        // the frame built before, and tells the display only when that retry succeeds, so while a paint
+        // Instrumentation only. This branch drops a repaint the rate would have allowed, and nothing
+        // re-arms it: while this state lasts, the batch's screenUpdated() only retries the swap of the
+        // frame built before, and tells the display only when that retry succeeds, so while a paint
         // still holds the front buffer the block's end shows only with the next repaint something else asks
         // for.
         ZoneScopedN("syncOut.dropped.trySwap");
@@ -8536,6 +8625,8 @@ void Terminal::synchronizedOutput(bool enabled)
         _renderBuffer.state = RenderBufferState::RefreshBuffersAndTrySwap;
         std::ignore =
             refreshRenderBufferWith([this](RenderBuffer& output) { fillRenderBufferInternal(output, true); });
+        if (renderInterval > std::chrono::steady_clock::duration::zero())
+            _lastSynchronizedOutputRender.store(now, std::memory_order_release);
         _eventListener.screenUpdated();
     }
 }

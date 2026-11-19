@@ -1086,6 +1086,15 @@ constexpr StringLiteral RendererConfig {
     "    {comment}\n"
     "    tile_cache_count: {}\n"
     "\n"
+    "    {comment} How many synchronized-output (DECSET 2026) blocks per second may build a frame.\n"
+    "    {comment} Applications such as TUIs frame their screen in such blocks; each closed block\n"
+    "    {comment} otherwise costs a full frame build, which the software renderer draws on the CPU.\n"
+    "    {comment} A block that ends sooner than this rate allows is held back: its output is in the\n"
+    "    {comment} grid already and reaches the screen at the next slot, even if the application then\n"
+    "    {comment} stops writing. 0 disables the limit; values may be fractional, e.g. 12.5.\n"
+    "    {comment} This does not change the 150 ms timeout that ends a block the application never closes.\n"
+    "    synchronized_output_rate: {}\n"
+    "\n"
 };
 
 constexpr StringLiteral CommandPaletteRecentCountConfig {
@@ -2133,7 +2142,8 @@ constexpr StringLiteral RendererWeb {
     "the terminal onto the screen. It includes the `backend` option to specify the Qt RHI graphics API, with "
     "possible values of `auto` (the native backend per platform), `OpenGL`, `vulkan`, `direct3d11`, "
     "`direct3d12`, `metal`, or `software`. The other options in this section control the "
-    "tile mapping and caching for performance optimization. "
+    "tile mapping and caching for performance optimization, and `synchronized_output_rate` caps how often "
+    "an application's synchronized-output frames build a render buffer. "
 };
 
 constexpr StringLiteral WordDelimitersWeb {

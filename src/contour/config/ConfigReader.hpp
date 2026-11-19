@@ -829,7 +829,8 @@ struct Writer
                       v.gpu,
                       v.textureAtlasDirectMapping,
                       v.textureAtlasHashtableSlots,
-                      v.textureAtlasTileCount);
+                      v.textureAtlasTileCount,
+                      v.synchronizedOutputRate);
     }
 
     [[nodiscard]] std::string format(std::string_view doc, ImagesConfig const& v)

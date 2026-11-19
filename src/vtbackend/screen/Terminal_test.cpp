@@ -1037,6 +1037,153 @@ TEST_CASE("Terminal.SynchronizedOutput", "[terminal]")
     CHECK("Hello  World" == trimmedTextScreenshot(mc));
 }
 
+TEST_CASE("Terminal.SynchronizedOutputRate", "[terminal]")
+{
+    using namespace vtbackend;
+    using namespace std::chrono_literals;
+
+    constexpr auto BatchOn = "\033[?2026h"sv;
+    constexpr auto BatchOff = "\033[?2026l"sv;
+
+    /// Counts the repaints the terminal asked its display for, which is how a deferred block end is
+    /// observed without a display: the frame built for a rendered block is counted by lastFrameID().
+    struct CountingTerm final: MockTerm<>
+    {
+        using MockTerm<>::MockTerm;
+        int renderBufferUpdates = 0;
+        void renderBufferUpdated() override { ++renderBufferUpdates; }
+    };
+
+    auto mc = CountingTerm { ColumnCount(20), LineCount(1) };
+    mc.steadyClock.advance(1s); // a second into the session: past the render throttle's interval
+
+    SECTION("a tick with nothing owed does nothing")
+    {
+        auto const framesBefore = mc.terminal.lastFrameID();
+        mc.steadyClock.advance(1s);
+        mc.terminal.tick(mc.steadyClock.now());
+        CHECK(mc.terminal.renderBufferUpdates == 0);
+        CHECK(mc.terminal.lastFrameID() == framesBefore);
+    }
+
+    SECTION("rate 0 renders every closed block")
+    {
+        // The default: unchanged. Each block end builds one frame and asks the display for it, so the
+        // number of builds is the number of blocks.
+        mc.terminal.settings().synchronizedOutputRate = 0.0;
+
+        auto builds = 0u;
+        for (auto const text: { "one"sv, "two"sv, "three"sv })
+        {
+            auto const before = mc.terminal.lastFrameID();
+            mc.writeToScreen(BatchOn);
+            mc.writeToScreen(text);
+            mc.writeToScreen(BatchOff);
+            builds += static_cast<unsigned>(mc.terminal.lastFrameID() - before);
+            mc.steadyClock.advance(100ms);
+        }
+        CHECK(builds == 3u);
+    }
+
+    SECTION("a block inside the spacing is held back until its slot")
+    {
+        mc.terminal.settings().synchronizedOutputRate = 12.5; // one rendered block per 80 ms
+
+        mc.writeToScreen(BatchOn);
+        mc.writeToScreen("one");
+        mc.writeToScreen(BatchOff);
+        auto const afterFirst = mc.terminal.lastFrameID();
+
+        // Closed 10 ms after the block that rendered: no frame is built, and the content is in the grid
+        // already. The one notification here is not a render: it is what makes the display run a frame and
+        // arm its timer from nextRender(), since the timer is only ever armed at the end of one.
+        mc.steadyClock.advance(10ms);
+        mc.writeToScreen(BatchOn);
+        mc.writeToScreen("two");
+        mc.writeToScreen(BatchOff);
+        CHECK(mc.terminal.lastFrameID() == afterFirst);
+        CHECK(mc.terminal.renderBufferUpdates == 1);
+        CHECK(mc.terminal.isRenderingSuppressed()); // the batch's screenUpdated() must not build it either
+        CHECK_FALSE(mc.terminal.ensureFreshRenderBuffer());
+        CHECK(trimmedTextScreenshot(mc) == "one");
+
+        // The slot is published, so the display arms its timer without any further output.
+        auto const wait = mc.terminal.nextRender();
+        REQUIRE(wait.has_value());
+        CHECK(*wait == 70ms);
+
+        // A block that ends inside the same window needs no second wakeup: the timer already runs to the
+        // same slot.
+        mc.steadyClock.advance(5ms);
+        mc.writeToScreen(BatchOn);
+        mc.writeToScreen("three");
+        mc.writeToScreen(BatchOff);
+        CHECK(mc.terminal.renderBufferUpdates == 1);
+        CHECK(mc.terminal.lastFrameID() == afterFirst);
+
+        // The slot has come: exactly one notification for it, and the frame the grid has been holding is
+        // built.
+        mc.steadyClock.advance(65ms);
+        mc.terminal.tick(mc.steadyClock.now());
+        CHECK(mc.terminal.renderBufferUpdates == 2);
+        CHECK(mc.terminal.lastFrameID() == afterFirst); // tick() asks, the render thread builds
+        CHECK_FALSE(mc.terminal.isRenderingSuppressed());
+        CHECK(mc.terminal.ensureFreshRenderBuffer());
+        CHECK(trimmedTextScreenshot(mc) == "three");
+
+        // Nothing is owed any more: a tick of its own does nothing.
+        mc.steadyClock.advance(1s);
+        mc.terminal.tick(mc.steadyClock.now());
+        CHECK(mc.terminal.renderBufferUpdates == 2);
+        CHECK(mc.terminal.lastFrameID() == afterFirst + 1);
+    }
+
+    SECTION("a block at or after the spacing renders at once")
+    {
+        mc.terminal.settings().synchronizedOutputRate = 12.5;
+
+        mc.writeToScreen(BatchOn);
+        mc.writeToScreen("one");
+        mc.writeToScreen(BatchOff);
+        auto const afterFirst = mc.terminal.lastFrameID();
+
+        mc.steadyClock.advance(80ms); // exactly the spacing for 12.5 Hz
+        mc.writeToScreen(BatchOn);
+        mc.writeToScreen("two");
+        mc.writeToScreen(BatchOff);
+        CHECK(mc.terminal.lastFrameID() == afterFirst + 1);
+        CHECK_FALSE(mc.terminal.isRenderingSuppressed());
+    }
+
+    SECTION("fractional rates give fractional spacings")
+    {
+        auto const [rate, spacing] = GENERATE(table<double, std::chrono::milliseconds>({
+            { 12.5, 80ms },
+            { 4.0, 250ms },
+            { 2.0, 500ms },
+        }));
+        auto fresh = CountingTerm { ColumnCount(20), LineCount(1) };
+        fresh.steadyClock.advance(1s);
+        fresh.terminal.settings().synchronizedOutputRate = rate;
+
+        fresh.writeToScreen(BatchOn);
+        fresh.writeToScreen("one");
+        fresh.writeToScreen(BatchOff);
+
+        fresh.steadyClock.advance(1ms);
+        fresh.writeToScreen(BatchOn);
+        fresh.writeToScreen("two");
+        fresh.writeToScreen(BatchOff);
+
+        // The deadline is the last rendered block's time plus the spacing the rate names, not a whole
+        // multiple of any frame divisor.
+        auto const wait = fresh.terminal.nextRender();
+        REQUIRE(wait.has_value());
+        CHECK(*wait == spacing - 1ms);
+        CHECK(fresh.terminal.isRenderingSuppressed());
+    }
+}
+
 TEST_CASE("Terminal.XTPUSHCOLORS_and_XTPOPCOLORS", "[terminal]")
 {
     using namespace vtbackend;
