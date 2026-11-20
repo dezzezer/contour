@@ -1129,7 +1129,9 @@ TEST_CASE("Terminal.SynchronizedOutputRate", "[terminal]")
         CHECK(mc.terminal.lastFrameID() == afterFirst); // tick() asks, the render thread builds
         CHECK_FALSE(mc.terminal.isRenderingSuppressed());
         CHECK(mc.terminal.ensureFreshRenderBuffer());
-        CHECK(trimmedTextScreenshot(mc) == "three");
+        // The deferred blocks were parsed into the grid all along, so the one frame that did draw shows
+        // their text too -- skipping a frame skips a render, never the content.
+        CHECK(trimmedTextScreenshot(mc) == "onetwothree");
 
         // Nothing is owed any more: a tick of its own does nothing.
         mc.steadyClock.advance(1s);
